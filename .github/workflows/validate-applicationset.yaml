@@ -1,0 +1,146 @@
+name: Reusable ApplicationSet Validation
+
+on:
+  workflow_call:
+    inputs:
+      applicationset_chart_path:
+        description: Path to the reusable ApplicationSet Helm chart
+        required: true
+        type: string
+
+      values_file:
+        description: Values file used for the ApplicationSet
+        required: true
+        type: string
+
+      environment:
+        description: Optional explicit environment override
+        required: false
+        type: string
+        default: ""
+
+      cluster_selector_key:
+        description: Label key used for cluster selection
+        required: false
+        type: string
+        default: gox.li9.com/environment
+
+    outputs:
+      environment:
+        description: Resolved target environment
+        value: ${{ jobs.validate.outputs.environment }}
+
+      selector_key:
+        description: Cluster selector label key
+        value: ${{ jobs.validate.outputs.selector_key }}
+
+      selector_value:
+        description: Cluster selector label value
+        value: ${{ jobs.validate.outputs.selector_value }}
+
+jobs:
+  validate:
+    name: Validate Inputs and Target
+    runs-on: ubuntu-latest
+
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+      selector_key: ${{ steps.target.outputs.selector_key }}
+      selector_value: ${{ steps.target.outputs.selector_value }}
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+# Determine the deployment target from either an explicit
+# environment input or the caller's Git branch.
+#
+# The resolved values are exported for downstream reusable workflows.        
+
+      - name: Resolve target environment
+        id: target
+        shell: bash
+        env:
+          EXPLICIT_ENVIRONMENT: ${{ inputs.environment }}
+          CALLER_BRANCH: ${{ github.ref_name }}
+          SELECTOR_KEY: ${{ inputs.cluster_selector_key }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${EXPLICIT_ENVIRONMENT}" ]]; then
+            environment="${EXPLICIT_ENVIRONMENT}"
+            resolution_source="explicit input"
+          else
+            case "${CALLER_BRANCH}" in
+              sbx)
+                environment="sbx"
+                ;;
+              stg)
+                environment="stg"
+                ;;
+              main)
+                environment="prd"
+                ;;
+              *)
+                echo "Unsupported branch: ${CALLER_BRANCH}"
+                echo "Use sbx, stg, or main, or provide an explicit environment."
+                exit 1
+                ;;
+            esac
+
+            resolution_source="branch mapping"
+          fi
+
+          case "${environment}" in
+            sbx|stg|prd)
+              ;;
+            *)
+              echo "Unsupported environment: ${environment}"
+              exit 1
+              ;;
+          esac
+
+          if [[ -z "${SELECTOR_KEY}" ]]; then
+            echo "cluster_selector_key must not be empty."
+            exit 1
+          fi
+
+          echo "environment=${environment}" >> "${GITHUB_OUTPUT}"
+          echo "selector_key=${SELECTOR_KEY}" >> "${GITHUB_OUTPUT}"
+          echo "selector_value=${environment}" >> "${GITHUB_OUTPUT}"
+
+          echo "Resolved environment: ${environment}"
+          echo "Resolution source: ${resolution_source}"
+          echo "Cluster selector: ${SELECTOR_KEY}=${environment}"
+
+# Verify that the caller repository contains the expected
+# ApplicationSet Helm chart and values file before rendering.          
+
+      - name: Validate required files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -d "${{ inputs.applicationset_chart_path }}" ]]; then
+            echo "ApplicationSet chart path does not exist:"
+            echo "${{ inputs.applicationset_chart_path }}"
+            exit 1
+          fi
+
+          if [[ ! -f "${{ inputs.values_file }}" ]]; then
+            echo "Values file does not exist:"
+            echo "${{ inputs.values_file }}"
+            exit 1
+          fi
+
+# Perform Helm lint to catch template and values issues
+# before the rendering stage.          
+
+      - name: Validate Helm chart
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm lint \
+            "${{ inputs.applicationset_chart_path }}" \
+            -f "${{ inputs.values_file }}"

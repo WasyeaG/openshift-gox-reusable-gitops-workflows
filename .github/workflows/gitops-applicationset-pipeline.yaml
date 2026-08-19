@@ -1,0 +1,89 @@
+name: Reusable GitOps ApplicationSet Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      applicationset_chart_path:
+        description: Path to the reusable ApplicationSet Helm chart
+        required: true
+        type: string
+
+      values_file:
+        description: Values file used to render the ApplicationSet
+        required: true
+        type: string
+
+      environment:
+        description: Optional explicit environment override
+        required: false
+        type: string
+        default: ""
+
+      cluster_selector_key:
+        description: Label key used for cluster selection
+        required: false
+        type: string
+        default: gox.li9.com/environment
+
+      namespace:
+        description: Namespace where the ApplicationSet is applied
+        required: false
+        type: string
+        default: openshift-gitops
+
+      apply:
+        description: Apply the rendered ApplicationSet to OpenShift
+        required: false
+        type: boolean
+        default: false
+
+    secrets:
+      openshift_server:
+        required: false
+
+      openshift_token:
+        required: false
+
+# Validate inputs and determine the deployment target
+# before any rendering occurs.        
+
+jobs:
+  validate:
+    name: Validate
+    uses: ./.github/workflows/validate-applicationset.yaml
+    with:
+      applicationset_chart_path: ${{ inputs.applicationset_chart_path }}
+      values_file: ${{ inputs.values_file }}
+      environment: ${{ inputs.environment }}
+      cluster_selector_key: ${{ inputs.cluster_selector_key }}
+
+# Render the reusable ApplicationSet using the validated
+# deployment inputs from the previous stage.      
+
+  render:
+    name: Render
+    needs: validate
+    uses: ./.github/workflows/render-applicationset.yaml
+    with:
+      applicationset_chart_path: ${{ inputs.applicationset_chart_path }}
+      values_file: ${{ inputs.values_file }}
+      environment: ${{ needs.validate.outputs.environment }}
+      cluster_selector_key: ${{ needs.validate.outputs.selector_key }}
+      cluster_selector_value: ${{ needs.validate.outputs.selector_value }}
+
+# Optionally deploy the rendered ApplicationSet when
+# apply mode is enabled by the caller.
+
+  deploy:
+    name: Deploy
+    if: ${{ inputs.apply }}
+    needs:
+      - validate
+      - render
+    uses: ./.github/workflows/deploy-applicationset.yaml
+    with:
+      artifact_name: ${{ needs.render.outputs.artifact_name }}
+      namespace: ${{ inputs.namespace }}
+    secrets:
+      openshift_server: ${{ secrets.openshift_server }}
+      openshift_token: ${{ secrets.openshift_token }}

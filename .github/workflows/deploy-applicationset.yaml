@@ -1,0 +1,95 @@
+name: Reusable ApplicationSet Deploy
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: Name of the rendered ApplicationSet artifact
+        required: true
+        type: string
+
+      namespace:
+        description: Namespace where the ApplicationSet will be applied
+        required: false
+        type: string
+        default: openshift-gitops
+
+    secrets:
+      openshift_server:
+        required: true
+
+      openshift_token:
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy ApplicationSet
+    runs-on: ubuntu-latest
+
+# Retrieve the rendered ApplicationSet artifact produced
+# by the rendering workflow.
+
+    steps:
+      - name: Download rendered ApplicationSet
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: rendered
+
+# Ensure the required OpenShift credentials are available
+# before attempting deployment.          
+
+      - name: Validate OpenShift credentials
+        shell: bash
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.openshift_server }}
+          OPENSHIFT_TOKEN: ${{ secrets.openshift_token }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${OPENSHIFT_SERVER}" ]]; then
+            echo "openshift_server secret is required."
+            exit 1
+          fi
+
+          if [[ -z "${OPENSHIFT_TOKEN}" ]]; then
+            echo "openshift_token secret is required."
+            exit 1
+          fi
+
+# Authenticate to the target OpenShift cluster using the
+# supplied reusable workflow secrets.          
+
+      - name: Log in to OpenShift
+        shell: bash
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.openshift_server }}
+          OPENSHIFT_TOKEN: ${{ secrets.openshift_token }}
+        run: |
+          set -euo pipefail
+
+          oc login "${OPENSHIFT_SERVER}" \
+            --token="${OPENSHIFT_TOKEN}"
+
+# Apply the previously rendered ApplicationSet manifest
+# to the target GitOps namespace.            
+
+      - name: Apply rendered ApplicationSet
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          oc apply \
+            -n "${{ inputs.namespace }}" \
+            -f rendered/applicationset.yaml
+
+# Verify that the ApplicationSet resource exists in the
+# target namespace after deployment.          
+
+      - name: Verify ApplicationSet resources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          oc get applicationsets.argoproj.io \
+            -n "${{ inputs.namespace }}"

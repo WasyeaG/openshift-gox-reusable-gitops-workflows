@@ -1,0 +1,88 @@
+name: Reusable ApplicationSet Render
+
+on:
+  workflow_call:
+    inputs:
+      applicationset_chart_path:
+        description: Path to the reusable ApplicationSet Helm chart
+        required: true
+        type: string
+
+      values_file:
+        description: Values file used to render the ApplicationSet
+        required: true
+        type: string
+
+      environment:
+        description: Resolved target environment
+        required: true
+        type: string
+
+      cluster_selector_key:
+        description: Cluster selector label key
+        required: true
+        type: string
+
+      cluster_selector_value:
+        description: Cluster selector label value
+        required: true
+        type: string
+
+    outputs:
+      artifact_name:
+        description: Name of the rendered ApplicationSet artifact
+        value: ${{ jobs.render.outputs.artifact_name }}
+
+jobs:
+  render:
+    name: Render ApplicationSet
+    runs-on: ubuntu-latest
+
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+# Render the reusable ApplicationSet Helm chart using
+# the validated inputs from the previous workflow.
+#
+# The rendered manifest becomes the deployment artifact
+# for downstream workflows.        
+
+      - name: Render ApplicationSet
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p rendered
+
+          helm template gitops-applicationset \
+            "${{ inputs.applicationset_chart_path }}" \
+            -f "${{ inputs.values_file }}" \
+            --set-string clusterSelector.key="${{ inputs.cluster_selector_key }}" \
+            --set-string clusterSelector.value="${{ inputs.cluster_selector_value }}" \
+            --set-string environment="${{ inputs.environment }}" \
+            > rendered/applicationset.yaml
+
+          echo "Rendered ApplicationSet:"
+          cat rendered/applicationset.yaml
+
+# Generate a predictable artifact name based on the
+# resolved deployment environment.          
+
+      - name: Define artifact name
+        id: artifact
+        shell: bash
+        run: |
+          echo "name=rendered-applicationset-${{ inputs.environment }}" >> "${GITHUB_OUTPUT}"
+
+# Publish the rendered ApplicationSet manifest as a
+# GitHub Actions artifact for downstream deployment workflows.         
+
+      - name: Upload rendered ApplicationSet
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: rendered/applicationset.yaml
