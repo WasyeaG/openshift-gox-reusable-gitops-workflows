@@ -45,6 +45,13 @@ jobs:
       - name: Checkout caller repository
         uses: actions/checkout@v4
 
+      - name: Checkout reusable ApplicationSet template
+        uses: actions/checkout@v4
+        with:
+          repository: WasyeaG/openshift-gox-applicationset-template
+          ref: main
+          path: reusable-applicationset
+
 # Render the reusable ApplicationSet Helm chart using
 # the validated inputs from the previous workflow.
 #
@@ -59,7 +66,7 @@ jobs:
           mkdir -p rendered
 
           helm template gitops-applicationset \
-            "${{ inputs.applicationset_chart_path }}" \
+            "reusable-applicationset/${{ inputs.applicationset_chart_path }}" \
             -f "${{ inputs.values_file }}" \
             --set-string clusterSelector.key="${{ inputs.cluster_selector_key }}" \
             --set-string clusterSelector.value="${{ inputs.cluster_selector_value }}" \

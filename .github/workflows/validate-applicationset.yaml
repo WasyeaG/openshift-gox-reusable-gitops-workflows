@@ -52,6 +52,13 @@ jobs:
       - name: Checkout caller repository
         uses: actions/checkout@v4
 
+      - name: Checkout reusable ApplicationSet template
+        uses: actions/checkout@v4
+        with:
+          repository: WasyeaG/openshift-gox-applicationset-template
+          ref: main
+          path: reusable-applicationset
+
 # Determine the deployment target from either an explicit
 # environment input or the caller's Git branch.
 #
@@ -121,9 +128,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! -d "${{ inputs.applicationset_chart_path }}" ]]; then
+          if [[ ! -d "reusable-applicationset/${{ inputs.applicationset_chart_path }}" ]]; then
             echo "ApplicationSet chart path does not exist:"
-            echo "${{ inputs.applicationset_chart_path }}"
+            echo "reusable-applicationset/${{ inputs.applicationset_chart_path }}"
             exit 1
           fi
 
@@ -142,5 +149,5 @@ jobs:
           set -euo pipefail
 
           helm lint \
-            "${{ inputs.applicationset_chart_path }}" \
+            "reusable-applicationset/${{ inputs.applicationset_chart_path }}" \
             -f "${{ inputs.values_file }}"
