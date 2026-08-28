@@ -1,0 +1,126 @@
+name: Reusable Push GitOps Pipeline
+
+on:
+  workflow_call:
+    secrets:
+      openshift_server:
+        required: false
+      openshift_token:
+        required: false
+
+jobs:
+  render:
+    name: Render ApplicationSet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Checkout reusable ApplicationSet template
+        uses: actions/checkout@v4
+        with:
+          repository: WasyeaG/openshift-gox-applicationset-template
+          ref: main
+          path: reusable-applicationset
+
+      - name: Resolve deployment target
+        id: target
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          case "${BRANCH}" in
+            sbx)
+              environment="sbx"
+              revision="${BRANCH}"
+              ;;
+            stg)
+              environment="stg"
+              revision="${SHA}"
+              ;;
+            main)
+              environment="prd"
+              revision="${SHA}"
+              ;;
+            feat/*|feature/*)
+              environment="sbx"
+              revision="${BRANCH}"
+              ;;
+            *)
+              echo "Unsupported deployment branch: ${BRANCH}"
+              exit 1
+              ;;
+          esac
+
+          echo "environment=${environment}" >> "${GITHUB_OUTPUT}"
+          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
+
+          echo "Branch: ${BRANCH}"
+          echo "Environment: ${environment}"
+          echo "Revision: ${revision}"
+
+      - name: Validate repository convention
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+        run: |
+          set -euo pipefail
+
+          test -f applicationset/values-common.yaml
+          test -f "applicationset/values-${ENVIRONMENT}.yaml"
+
+          chart_count="$(find charts -mindepth 2 -maxdepth 2 -name Chart.yaml | wc -l | tr -d ' ')"
+
+          if [[ "${chart_count}" != "1" ]]; then
+            echo "Expected exactly one workload Helm chart under charts/."
+            echo "Found: ${chart_count}"
+            exit 1
+          fi
+
+      - name: Lint workload chart
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chart_file="$(find charts -mindepth 2 -maxdepth 2 -name Chart.yaml | head -1)"
+          chart_dir="$(dirname "${chart_file}")"
+
+          echo "Workload chart: ${chart_dir}"
+          helm lint "${chart_dir}"
+
+      - name: Render ApplicationSet
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+          REVISION: ${{ steps.target.outputs.revision }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p rendered
+
+          helm lint reusable-applicationset/charts/applicationset-template \
+            -f applicationset/values-common.yaml \
+            -f "applicationset/values-${ENVIRONMENT}.yaml" \
+            --set-string source.targetRevision="${REVISION}"
+
+          helm template gitops-applicationset \
+            reusable-applicationset/charts/applicationset-template \
+            -f applicationset/values-common.yaml \
+            -f "applicationset/values-${ENVIRONMENT}.yaml" \
+            --set-string source.targetRevision="${REVISION}" \
+            > rendered/applicationset.yaml
+
+          echo "Rendered environment: ${ENVIRONMENT}"
+          echo "Rendered revision: ${REVISION}"
+          cat rendered/applicationset.yaml
+
+      - name: Upload rendered ApplicationSet
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-applicationset-${{ steps.target.outputs.environment }}
+          path: rendered/applicationset.yaml
+          retention-days: 7

@@ -1,0 +1,111 @@
+name: Reusable Pull Request GitOps Pipeline
+
+on:
+  workflow_call:
+
+jobs:
+  validate:
+    name: Validate GitOps Changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Checkout reusable ApplicationSet template
+        uses: actions/checkout@v4
+        with:
+          repository: WasyeaG/openshift-gox-applicationset-template
+          ref: main
+          path: reusable-applicationset
+
+      - name: Resolve pull request target
+        id: target
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          case "${BASE_BRANCH}" in
+            sbx)
+              environment="sbx"
+              ;;
+            stg)
+              environment="stg"
+              ;;
+            main)
+              environment="prd"
+              ;;
+            *)
+              echo "Unsupported PR base branch: ${BASE_BRANCH}"
+              exit 1
+              ;;
+          esac
+
+          echo "environment=${environment}" >> "${GITHUB_OUTPUT}"
+          echo "revision=${HEAD_BRANCH}" >> "${GITHUB_OUTPUT}"
+
+          echo "PR source: ${HEAD_BRANCH}"
+          echo "PR target: ${BASE_BRANCH}"
+          echo "Validation environment: ${environment}"
+
+      - name: Validate repository convention
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+        run: |
+          set -euo pipefail
+
+          test -f applicationset/values-common.yaml
+          test -f "applicationset/values-${ENVIRONMENT}.yaml"
+
+          chart_count="$(find charts -mindepth 2 -maxdepth 2 -name Chart.yaml | wc -l | tr -d ' ')"
+
+          if [[ "${chart_count}" != "1" ]]; then
+            echo "Expected exactly one workload Helm chart under charts/."
+            echo "Found: ${chart_count}"
+            exit 1
+          fi
+
+      - name: Validate workload chart
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chart_file="$(find charts -mindepth 2 -maxdepth 2 -name Chart.yaml | head -1)"
+          chart_dir="$(dirname "${chart_file}")"
+
+          helm lint "${chart_dir}"
+
+      - name: Validate and render ApplicationSet
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+          REVISION: ${{ steps.target.outputs.revision }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p rendered
+
+          helm lint reusable-applicationset/charts/applicationset-template \
+            -f applicationset/values-common.yaml \
+            -f "applicationset/values-${ENVIRONMENT}.yaml" \
+            --set-string source.targetRevision="${REVISION}"
+
+          helm template gitops-applicationset \
+            reusable-applicationset/charts/applicationset-template \
+            -f applicationset/values-common.yaml \
+            -f "applicationset/values-${ENVIRONMENT}.yaml" \
+            --set-string source.targetRevision="${REVISION}" \
+            > rendered/applicationset.yaml
+
+          cat rendered/applicationset.yaml
+
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-applicationset-${{ steps.target.outputs.environment }}
+          path: rendered/applicationset.yaml
+          retention-days: 7
